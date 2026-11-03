@@ -1,0 +1,273 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Onward Logistics order application for sales day demand. Internet facing
+  Application Load Balancer in public subnets, Auto Scaling order servers in
+  private subnets, scaling on CPU. Imports the network from the network stack.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+    Description: Environment name used in resource names and imports.
+
+  Owner:
+    Type: String
+    Default: Effie Njoki
+    Description: Owner tag value (company tagging standard).
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Latest Amazon Linux 2023 AMI for this Region, looked up at deploy time.
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t3.micro, t3.small]
+    Description: Free Tier eligible instance types only.
+
+  MinSize:
+    Type: Number
+    Default: 2
+    Description: One server per Availability Zone on a quiet day.
+
+  MaxSize:
+    Type: Number
+    Default: 6
+    Description: Sales day ceiling. Normal load is 2 servers, sales day is about three times that.
+
+  CpuTarget:
+    Type: Number
+    Default: 50
+    Description: Average CPU percentage that target tracking keeps the group near.
+
+  AppSourceUrl:
+    Type: String
+    Description: Raw GitHub URL of OrderApp.java at a pinned commit.
+
+Resources:
+
+  # ---------- Security groups ----------
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub onward-${Environment}-alb-sg
+      GroupDescription: Public entry point. HTTP from the internet to the load balancer only.
+      VpcId:
+        Fn::ImportValue: !Sub onward-${Environment}-network-VpcId
+      SecurityGroupIngress:
+        - Description: HTTP from customers and merchants
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub onward-${Environment}-alb-sg
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub onward-${Environment}-orders-app-sg
+      GroupDescription: Order servers. Accept the app port from the load balancer only. No admin ports.
+      VpcId:
+        Fn::ImportValue: !Sub onward-${Environment}-network-VpcId
+      SecurityGroupIngress:
+        - Description: App traffic from the load balancer only
+          IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub onward-${Environment}-orders-app-sg
+
+  # ---------- Server permissions ----------
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Lets order servers use Systems Manager (Session Manager and Run Command). No other access.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: Name
+          Value: !Sub onward-${Environment}-orders-instance-role
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref InstanceRole
+
+
+  # ---------- Load balancer: the single public entry point ----------
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub onward-${Environment}-orders-alb
+      Type: application
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Subnets: !Split
+        - ','
+        - Fn::ImportValue: !Sub onward-${Environment}-network-PublicSubnetIds
+      Tags:
+        - Key: Name
+          Value: !Sub onward-${Environment}-orders-alb
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub onward-${Environment}-orders-tg
+      VpcId:
+        Fn::ImportValue: !Sub onward-${Environment}-network-VpcId
+      Protocol: HTTP
+      Port: 8080
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 15
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+      Tags:
+        - Key: Name
+          Value: !Sub onward-${Environment}-orders-tg
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+
+  # ---------- Launch template: how every order server is built ----------
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub onward-${Environment}-orders-lt
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt InstanceProfile.Arn
+        SecurityGroupIds:
+          - !Ref AppSecurityGroup
+        MetadataOptions:
+          HttpTokens: required
+          HttpEndpoint: enabled
+        Monitoring:
+          Enabled: true
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -euxo pipefail
+
+            # Install Java 21 (comes through the Regional NAT Gateway)
+            dnf install -y java-21-amazon-corretto-headless
+
+            # Ordinary user with no login, so the app does not run as root
+            useradd --system --no-create-home --shell /sbin/nologin onward || true
+
+            # Fetch the app at the pinned version from the repository
+            mkdir -p /opt/onward
+            curl -fsSL --retry 5 -o /opt/onward/OrderApp.java "${AppSourceUrl}"
+            chown -R onward:onward /opt/onward
+
+            # Run the app as a service that starts on boot and restarts if it crashes
+            cat > /etc/systemd/system/onward-orders.service <<'EOF'
+            [Unit]
+            Description=Onward order application
+            After=network-online.target
+            Wants=network-online.target
+
+            [Service]
+            User=onward
+            WorkingDirectory=/opt/onward
+            ExecStart=/usr/bin/java /opt/onward/OrderApp.java
+            Restart=always
+            RestartSec=5
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            systemctl daemon-reload
+            systemctl enable --now onward-orders
+
+  # ---------- Auto Scaling group: 2 on a quiet day, up to 6 on a sales day ----------
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub onward-${Environment}-orders-asg
+      MinSize: !Ref MinSize
+      MaxSize: !Ref MaxSize
+      VPCZoneIdentifier: !Split
+        - ','
+        - Fn::ImportValue: !Sub onward-${Environment}-network-PrivateSubnetIds
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      TargetGroupARNs:
+        - !Ref TargetGroup
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 180
+      DefaultInstanceWarmup: 120
+      MetricsCollection:
+        - Granularity: 1Minute
+      Tags:
+        - Key: Name
+          Value: !Sub onward-${Environment}-orders-server
+          PropagateAtLaunch: true
+        - Key: Project
+          Value: onward
+          PropagateAtLaunch: true
+        - Key: Owner
+          Value: !Ref Owner
+          PropagateAtLaunch: true
+        - Key: Environment
+          Value: !Ref Environment
+          PropagateAtLaunch: true
+
+  # ---------- Scaling policy: keep average CPU near the target ----------
+
+  CpuTargetTrackingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: !Ref CpuTarget
+
+Outputs:
+  LoadBalancerUrl:
+    Description: The single public address of the order system.
+    Value: !Sub http://${LoadBalancer.DNSName}
+
+  AutoScalingGroupName:
+    Description: The order server Auto Scaling group.
+    Value: !Ref AutoScalingGroup

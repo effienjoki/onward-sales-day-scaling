@@ -1,0 +1,8 @@
+template-file-path: infrastructure/app.yaml
+parameters:
+  Environment: dev
+  AppSourceUrl: https://raw.githubusercontent.com/effienjoki/onward-sales-day-scaling/72d6bcca45ed625062262da446882b984ceafbeb/app/OrderApp.java
+tags:
+  Project: onward
+  Owner: Effie Njoki
+  Environment: dev
