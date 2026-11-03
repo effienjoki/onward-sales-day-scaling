@@ -67,8 +67,7 @@ Key design choices:
 | AWS Systems Manager | Session Manager for access and Run Command for the load test. | No SSH and no open admin ports, as the Head of Security requires. |
 | IAM role with AWS managed policy | Gives servers only the permissions Systems Manager needs. | Least privilege, no long lived keys, and no inline policies. |
 | Amazon CloudWatch | Tracks server CPU and drives the scaling policy. | Lets operations watch capacity change. |
-| AWS CloudFormation with Git sync | Builds everything from one template in the repository. | Repeatable, reviewable, and rebuildable at any time, matching company standards. |
-
+| AWS CloudFormation with Git sync | Builds everything from two smaller templates in the repository: a network stack and an app stack, connected by cross-stack exports and imports. | Repeatable and rebuildable. Splitting means app changes cannot break the network, and the network can be reused. |
 ### Who benefits, and how I will know
 
 | **Stakeholder** | **Benefit** | **How I would know** |
