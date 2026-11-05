@@ -52,7 +52,10 @@ Key design choices:
 - **Outbound internet.** One Regional NAT Gateway. I compared three options. One zonal NAT gateway is cheapest, but if its zone fails, servers in the other zone lose internet access. Two zonal NAT gateways, one per zone, remove that risk but add more resources and route tables to manage. A Regional NAT Gateway gives the same zone resilience as two zonal gateways from one resource that spans zones automatically. It is billed per zone it is active in, so the hourly cost matches two zonal gateways while the template stays simpler. The brief also requires it.
 - **Triggering a load spike securely.** I will raise CPU using AWS Systems Manager, which runs a timed command on the servers. No admin ports are opened, and IAM controls who can run it.
 
-**Cost view for the Finance Lead.** The main cost drivers are the servers (2 on a quiet day, up to 6 at peak), the load balancer, the Regional NAT Gateway in two zones, and the public IPv4 addresses on the load balancer and NAT gateway. My estimate for a quiet day and a peak day is here: [AWS Pricing Calculator estimate link]
+
+**Cost view for the Finance Lead.** My estimate is here: https://calculator.aws/#/estimate?id=d7ead3b8e815d032cca36d7533800a87d5c31ffd.
+- A quiet month, with 2 servers, the load balancer and the Regional NAT Gateway, costs about 126 USD. Sales days add about GROUP2 USD a month, because the extra servers only run during the rush and are removed afterwards. Running a fixed fleet sized for the peak would add about 45 USD every month, even on quiet days. The largest single cost is the Regional NAT Gateway, which is billed per Availability Zone it is active in.
+
 
 ### Services I will use
 
