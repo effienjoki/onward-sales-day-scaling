@@ -5,7 +5,7 @@ The Onward Logistics order system on Amazon EC2, built to absorb sales day traff
 
 **Discovery report:** [docs/discovery-report.md](docs/discovery-report.md)
 
-**Architecture diagram:** [diagrams/](diagrams/)
+**Architecture diagram:** [open in draw.io](https://app.diagrams.net/#Uhttps%3A%2F%2Fraw.githubusercontent.com%2Feffienjoki%2Fonward-sales-day-scaling%2Fmain%2Fdiagrams%2Fonward-lab1-architecture.drawio)
 
 ## What is in this repo
 
