@@ -115,7 +115,7 @@ Resources:
   LoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      Name: !Sub onward-${Environment}-orders-alb
+      Name: !Sub onward-${Environment}-salesday-alb
       Type: application
       Scheme: internet-facing
       SecurityGroups:
@@ -125,7 +125,7 @@ Resources:
         - Fn::ImportValue: !Sub onward-${Environment}-network-PublicSubnetIds
       Tags:
         - Key: Name
-          Value: !Sub onward-${Environment}-orders-alb
+          Value: !Sub onward-${Environment}-salesday-alb
 
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
